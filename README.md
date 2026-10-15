@@ -3,7 +3,7 @@
 A family organizer for our house. The iPhone app runs everything, and a kitchen display with a physical dial comes in phase 2.
 The look is 1950s mid-century: cream, pink and mint.
 
-This repo is **phase 1: the iPhone app plus its backend.**
+This repo is **phase 1: the phone app plus its backend.** The app is built with [Expo](https://expo.dev) (React Native + TypeScript), so it builds for iPhone without needing Xcode on your own machine. Demo mode also runs on Android; live mode needs Sign in with Apple, which is iPhone-only.
 
 | Area | What works in phase 1 |
 |---|---|
@@ -14,28 +14,42 @@ This repo is **phase 1: the iPhone app plus its backend.**
 | Lists | Groceries grouped by store. Scan a barcode or type an item. The app learns which store each item usually comes from. |
 | Sync | Every phone updates live (Supabase Realtime). |
 
-**Demo mode:** if there's no `Secrets.plist`, the app runs on sample data stored only on that phone. Use it to try the app before any backend exists.
+**Demo mode:** if the Supabase keys aren't set, the app runs on sample data stored only on that phone. Use it to try the app before any backend exists.
 
 ---
 
-## 1. Run it on your iPhone (demo mode)
+## 1. Try it on your phone (demo mode)
 
-You need a Mac with **Xcode 16.3 or newer** (the Supabase Swift package requires it), and your Apple Developer account.
+You need [Node.js](https://nodejs.org) 20 or newer and the **Expo Go** app from the App Store.
 
 ```bash
-brew install xcodegen
-cd ios
-xcodegen generate          # creates FamilyHub.xcodeproj from project.yml
-open FamilyHub.xcodeproj
+cd mobile
+npm install
+npx expo start
 ```
 
-In Xcode:
+Scan the QR code with the iPhone camera, and the app opens in Expo Go with sample data.
+Everything works in Expo Go, including the barcode scanner.
 
-1. Select the **FamilyHub** target, open **Signing & Capabilities**, and pick your Team.
-2. Plug in your iPhone and choose it as the run destination, then press **Run**.
+Handy checks while working on it: `npm run typecheck` and `npm run lint`.
 
-The Supabase Swift package downloads on the first build.
-Re-run `xcodegen generate` whenever you add, remove or rename files.
+## 2. Build the real app (EAS)
+
+Live mode with Sign in with Apple needs the app's own bundle ID, `com.amcgrean.familyhub`, so it needs a real build instead of Expo Go.
+[EAS Build](https://docs.expo.dev/build/introduction/) does this in the cloud with your Apple Developer account. No Mac is required.
+
+```bash
+cd mobile
+npx eas-cli@latest login
+npx eas-cli@latest init                                  # links the project to your Expo account (adds its id to app.json)
+npx eas-cli@latest build --profile development --platform ios
+```
+
+- **`development`** builds a dev client. Install it on your phone, then run `npx expo start` and it loads your latest code.
+- **`preview`** builds a standalone app for the family's phones. Register them with `npx eas-cli@latest device:create`.
+- **`production`** builds for TestFlight and the App Store. Upload it with `npx eas-cli@latest submit -p ios`.
+
+EAS sets up certificates, the provisioning profile and the Sign in with Apple capability for you the first time.
 
 ## 2. Go live with Supabase
 
@@ -51,18 +65,20 @@ Re-run `xcodegen generate` whenever you add, remove or rename files.
 ### Sign in with Apple
 
 1. In the Apple Developer portal, the App ID `com.amcgrean.familyhub` needs **Sign in with Apple**.
-   Xcode turns this on automatically through the entitlement.
+   EAS Build turns this on automatically (`usesAppleSignIn` in `mobile/app.json`).
 2. In Supabase, go to **Authentication → Providers → Apple**. Enable it and add `com.amcgrean.familyhub` under **Client IDs**.
    Native iOS sign-in doesn't need a Services ID or secret key.
 
 ### Point the app at it
 
-Copy `ios/FamilyHub/Resources/Secrets.example.plist` to `Secrets.plist` in the same folder, then fill in:
+Copy `mobile/.env.example` to `mobile/.env`, then fill in:
 
-- **SupabaseURL:** your project URL.
-- **SupabaseAnonKey:** the anon or publishable key.
+- **EXPO_PUBLIC_SUPABASE_URL:** your project URL.
+- **EXPO_PUBLIC_SUPABASE_ANON_KEY:** the anon or publishable key.
 
-Run `xcodegen generate` again, then build.
+Restart `npx expo start` to pick them up.
+For EAS builds, add the same two values as [EAS environment variables](https://docs.expo.dev/eas/environment-variables/), since `.env` is git-ignored and isn't uploaded.
+Both values are safe to ship in the app: row-level security protects the data.
 
 ### First sign-in
 
@@ -116,16 +132,18 @@ If neither source knows the item, the scan screen asks you to type a name. The b
 ## Project layout
 
 ```
-ios/
-  project.yml                 XcodeGen spec (iOS 17+, Supabase Swift package)
-  FamilyHub/
-    App/                      app entry, auth gate, tabs
-    Theme/                    palette, fonts, shared components
-    Models/                   Codable models matching the tables, date helpers
-    Services/                 Repository protocol, Demo + Supabase implementations, auth
-    State/HouseholdStore.swift   all app state and the daycare/learning rules
-    Features/                 Home, Calendar (+ event editor, daycare runs), Chores, Lists (+ scanner), Settings, Onboarding
-    Resources/Fonts/          Josefin Sans + Pacifico (SIL Open Font License)
+mobile/                       Expo app (SDK 57, Expo Router, TypeScript)
+  app.json                    app config: bundle ID, permissions, Sign in with Apple
+  eas.json                    EAS Build profiles (development, preview, production)
+  .env.example                Supabase URL + anon key (copy to .env)
+  src/
+    app/                      screens (Expo Router): auth gate, tabs, event editor, scanner, settings
+    components/               shared UI (cards, pills, buttons), daycare runs card, date field
+    lib/                      row types matching the tables, date helpers, Supabase client
+    services/                 Repository interface, Demo + Supabase implementations
+    state/                    household store (all app state + daycare/learning rules), auth, selectors
+    theme/                    palette and fonts
+  assets/fonts/               Josefin Sans + Pacifico (SIL Open Font License)
 docs/
   kitchen-display-brief.md    original Skylight web-dashboard brief (phase 2 input)
 supabase/

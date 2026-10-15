@@ -1,14 +1,6 @@
-# Xcode
-ios/FamilyHub.xcodeproj/
-ios/build/
-DerivedData/
-*.xcuserstate
-xcuserdata/
-
 # Local secrets — never commit
-ios/FamilyHub/Resources/Secrets.plist
+.env
 supabase/.env
 supabase/.temp/
-.env
 
 .DS_Store
