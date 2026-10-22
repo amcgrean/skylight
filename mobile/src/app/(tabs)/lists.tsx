@@ -3,12 +3,15 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { Modal, Pressable, View } from 'react-native';
 
+import { PantryList } from '../../components/PantryList';
 import {
   Card,
   CheckCircle,
   ColorDot,
+  Flow,
   OutlineButton,
   Page,
+  Pill,
   RetroTextField,
   ScreenHeader,
   T,
@@ -25,6 +28,7 @@ export default function ListsScreen() {
   const s = useHub();
   const [newItem, setNewItem] = useState('');
   const [picking, setPicking] = useState<GroceryItem | null>(null);
+  const [view, setView] = useState<'groceries' | 'pantry'>('groceries');
 
   const add = () => {
     const name = newItem;
@@ -49,44 +53,62 @@ export default function ListsScreen() {
   return (
     <Page>
       <ScreenHeader eyebrow="Shared with everyone" title="Our lists" />
+      <Flow>
+        <Pill label={`Groceries · ${sel.groceriesLeft(s)}`} selected={view === 'groceries'} onPress={() => setView('groceries')} />
+        <Pill
+          label={`Pantry · ${s.pantry.filter((p) => p.quantity > 0).length}`}
+          selected={view === 'pantry'}
+          onPress={() => setView('pantry')}
+        />
+      </Flow>
 
-      <Card fill={Palette.pink} padding={14} style={{ gap: 10 }}>
-        <T size={16} weight="bold">{`Groceries · ${sel.groceriesLeft(s)} left`}</T>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <RetroTextField
-            placeholder="Add an item"
-            value={newItem}
-            onChangeText={setNewItem}
-            onSubmitEditing={add}
-            style={{ flex: 1 }}
-          />
-          <Pressable
-            onPress={add}
-            style={{ paddingHorizontal: 16, minHeight: 46, borderRadius: 12, backgroundColor: Palette.mintDeep, justifyContent: 'center' }}
-          >
-            <T size={15} weight="bold" color="#FFFFFF">Add</T>
-          </Pressable>
-        </View>
-        <OutlineButton title="Scan a barcode" icon="barcode-outline" onPress={() => router.push('/scan')} />
-        <T size={12} color={Palette.pinkText}>{hint}</T>
-      </Card>
-
-      {sections.map((section) => (
-        <Card key={section.title} bordered padding={14} style={{ gap: 0 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
-            <ColorDot hex={section.color} size={12} outlined={false} />
-            <T size={15} weight="bold" style={{ flex: 1 }}>{section.title}</T>
-            <T size={12} weight="bold" color={Palette.inkSoft}>{`${section.items.filter((i) => !i.checked).length} left`}</T>
-          </View>
-          {section.items.map((item) => (
-            <View key={item.id} style={{ borderTopWidth: 1, borderTopColor: Palette.sand }}>
-              <GroceryRow item={item} onPickStore={() => setPicking(item)} />
+      {view === 'pantry' ? (
+        <PantryList />
+      ) : (
+        <>
+          <Card fill={Palette.pink} padding={14} style={{ gap: 10 }}>
+            <T size={16} weight="bold">{`Groceries · ${sel.groceriesLeft(s)} left`}</T>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <RetroTextField
+                placeholder="Add an item"
+                value={newItem}
+                onChangeText={setNewItem}
+                onSubmitEditing={add}
+                style={{ flex: 1 }}
+              />
+              <Pressable
+                onPress={add}
+                style={{ paddingHorizontal: 16, minHeight: 46, borderRadius: 12, backgroundColor: Palette.mintDeep, justifyContent: 'center' }}
+              >
+                <T size={15} weight="bold" color="#FFFFFF">Add</T>
+              </Pressable>
             </View>
-          ))}
-        </Card>
-      ))}
+            <OutlineButton
+              title="Scan a barcode"
+              icon="barcode-outline"
+              onPress={() => router.push({ pathname: '/scan', params: { mode: 'grocery' } })}
+            />
+            <T size={12} color={Palette.pinkText}>{hint}</T>
+          </Card>
 
-      {s.groceries.some((g) => g.checked) && <TextButton title="Clear checked items" onPress={() => void s.clearChecked()} />}
+          {sections.map((section) => (
+            <Card key={section.title} bordered padding={14} style={{ gap: 0 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingBottom: 6 }}>
+                <ColorDot hex={section.color} size={12} outlined={false} />
+                <T size={15} weight="bold" style={{ flex: 1 }}>{section.title}</T>
+                <T size={12} weight="bold" color={Palette.inkSoft}>{`${section.items.filter((i) => !i.checked).length} left`}</T>
+              </View>
+              {section.items.map((item) => (
+                <View key={item.id} style={{ borderTopWidth: 1, borderTopColor: Palette.sand }}>
+                  <GroceryRow item={item} onPickStore={() => setPicking(item)} />
+                </View>
+              ))}
+            </Card>
+          ))}
+
+          {s.groceries.some((g) => g.checked) && <TextButton title="Clear checked items" onPress={() => void s.clearChecked()} />}
+        </>
+      )}
 
       <StorePicker item={picking} onClose={() => setPicking(null)} />
     </Page>

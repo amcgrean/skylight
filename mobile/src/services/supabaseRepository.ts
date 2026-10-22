@@ -11,8 +11,10 @@ import {
   type GroceryItem,
   type GroceryStore,
   type Household,
+  type HouseholdProduct,
   type Meal,
   type Member,
+  type PantryItem,
   type ProductInfo,
   type Snapshot,
   type StoreStat,
@@ -67,7 +69,7 @@ export class SupabaseRepository implements Repository {
     const toKey = dayKey(to);
     const c = this.client;
 
-    const [household, members, events, pattern, overrides, chores, completions, stores, groceries, stats, meals] =
+    const [household, members, events, pattern, overrides, chores, completions, stores, groceries, stats, meals, named, pantry] =
       await Promise.all([
         c.from('households').select().eq('id', h).single(),
         c.from('members').select().eq('household_id', h).order('sort'),
@@ -82,6 +84,8 @@ export class SupabaseRepository implements Repository {
         c.from('grocery_items').select().eq('household_id', h).order('created_at'),
         c.from('store_stats').select().eq('household_id', h),
         c.from('meals').select().eq('household_id', h).gte('day', fromKey).lte('day', toKey),
+        c.from('household_products').select('household_id, upc, name, updated_by').eq('household_id', h),
+        c.from('pantry_items').select().eq('household_id', h).order('name'),
       ]);
 
     return {
@@ -102,6 +106,8 @@ export class SupabaseRepository implements Repository {
       groceries: must(groceries) as GroceryItem[],
       storeStats: must(stats) as StoreStat[],
       meals: must(meals) as Meal[],
+      householdProducts: must(named) as HouseholdProduct[],
+      pantry: must(pantry) as PantryItem[],
     };
   }
 
@@ -195,6 +201,24 @@ export class SupabaseRepository implements Repository {
     if (error) throw error;
     if (!data) throw new Error('Empty barcode response');
     return data;
+  }
+
+  async rememberProduct(product: HouseholdProduct): Promise<void> {
+    must(await this.client.from('household_products').upsert(product, { onConflict: 'household_id,upc' }));
+  }
+
+  // MARK: Pantry
+
+  async adjustPantry(
+    householdID: UUID, key: string, name: string, upc: string | null, delta: number, by: UUID | null,
+  ): Promise<PantryItem> {
+    return must(await this.client.rpc('adjust_pantry', {
+      p_household: householdID, p_product_key: key, p_name: name, p_upc: upc, p_delta: delta, p_member: by,
+    })) as PantryItem;
+  }
+
+  async deletePantryItem(id: UUID): Promise<void> {
+    must(await this.client.from('pantry_items').delete().eq('id', id));
   }
 
   // MARK: Meals & members

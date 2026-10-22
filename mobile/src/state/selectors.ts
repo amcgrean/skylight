@@ -10,8 +10,10 @@ import {
   type FamilyEvent,
   type GroceryItem,
   type GroceryStore,
+  type HouseholdProduct,
   type Meal,
   type Member,
+  type PantryItem,
   type StoreStat,
   type UUID,
 } from '../lib/types';
@@ -28,6 +30,8 @@ export type HubData = {
   groceries: GroceryItem[];
   storeStats: StoreStat[];
   meals: Record<string, Meal>;
+  householdProducts: Record<string, HouseholdProduct>; // by upc
+  pantry: PantryItem[];
 };
 
 export type AgendaFilter = { kind: 'everyone' } | { kind: 'member'; id: UUID } | { kind: 'grandparents' };
@@ -220,4 +224,20 @@ export function cookLabel(s: HubData, m: Meal | undefined): string {
   if (!m) return 'Nothing planned yet';
   const cook = member(s, m.cook_member);
   return cook ? `${cook.name} cooks` : m.cook_label ?? '';
+}
+
+// MARK: Barcodes & pantry
+
+/** The name the family gave this barcode, if any. */
+export const rememberedName = (s: HubData, upc: string) => s.householdProducts[upc]?.name ?? null;
+
+export const pantryItem = (s: HubData, key: string) => s.pantry.find((p) => p.product_key === key);
+
+/** On-hand items first (A–Z), then the ones that ran out. */
+export function pantrySorted(s: HubData): { onHand: PantryItem[]; out: PantryItem[] } {
+  const byName = (a: PantryItem, b: PantryItem) => a.name.localeCompare(b.name);
+  return {
+    onHand: s.pantry.filter((p) => p.quantity > 0).sort(byName),
+    out: s.pantry.filter((p) => p.quantity === 0).sort(byName),
+  };
 }

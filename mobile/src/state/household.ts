@@ -11,6 +11,7 @@ import {
   type GroceryItem,
   type Household,
   type Member,
+  type PantryItem,
   type ProductInfo,
   type Snapshot,
   type UUID,
@@ -22,7 +23,9 @@ import {
   family,
   grandparents,
   member,
+  pantryItem,
   patternFor,
+  rememberedName,
   runners,
   store as storeByID,
   suggestion,
@@ -81,6 +84,11 @@ type HubState = HubData & {
   toggleGrocery: (item: GroceryItem) => Promise<void>;
   clearChecked: () => Promise<void>;
   lookup: (upc: string) => Promise<ProductInfo | null>;
+  rememberName: (upc: string, name: string) => Promise<void>;
+
+  addToPantry: (name: string, upc?: string | null, count?: number) => Promise<PantryItem | null>;
+  adjustPantryItem: (item: PantryItem, delta: number) => Promise<void>;
+  removePantryItem: (item: PantryItem) => Promise<void>;
 
   setMeal: (day: Date, title: string, cook: UUID | null, label: string | null) => Promise<void>;
   updateEmail: (m: Member, email: string) => Promise<boolean>;
@@ -99,6 +107,8 @@ const empty: HubData & Pick<HubState, 'household' | 'hasLoaded' | 'loadError' | 
   groceries: [],
   storeStats: [],
   meals: {},
+  householdProducts: {},
+  pantry: [],
   hasLoaded: false,
   loadError: null,
   toast: null,
@@ -123,6 +133,8 @@ function fromSnapshot(s: Snapshot): Partial<HubState> {
     groceries: s.groceries,
     storeStats: s.storeStats,
     meals: Object.fromEntries(s.meals.map((m) => [m.day, m])),
+    householdProducts: Object.fromEntries(s.householdProducts.map((p) => [p.upc, p])),
+    pantry: s.pantry,
   };
 }
 
@@ -397,6 +409,7 @@ export const useHub = create<HubState>()((set, get) => {
       };
       set({ groceries: [...get().groceries, item] });
       if (!(await attempt('add the item', () => repo().addGrocery(item)))) return;
+      if (upc) await get().rememberName(upc, clean);
       if (storeID) {
         // Only an explicit choice that differs from what was learned teaches the app;
         // the purchase itself is counted when the checked item is cleared.
@@ -438,13 +451,71 @@ export const useHub = create<HubState>()((set, get) => {
       get().flash(`Cleared ${done.length} item${done.length === 1 ? '' : 's'}`);
     },
 
+    /** The family's own name wins; otherwise ask the barcode databases. */
     lookup: async (upc) => {
+      const named = rememberedName(get(), upc);
+      if (named) return { upc, name: named, brand: null, found: true, source: 'household' };
       try {
         return await repo().lookupUPC(upc);
       } catch {
-        get().flash('Barcode lookup failed — type a name instead');
-        return null;
+        return { upc, name: null, brand: null, found: false, incomplete: true };
       }
+    },
+
+    rememberName: async (upc, name) => {
+      const hid = get().household?.id;
+      const clean = name.trim();
+      if (!hid || !clean || rememberedName(get(), upc) === clean) return;
+      const product = { household_id: hid, upc, name: clean, updated_by: get().me?.id ?? null };
+      set({ householdProducts: { ...get().householdProducts, [upc]: product } });
+      try {
+        await repo().rememberProduct(product);
+      } catch {
+        // Best-effort: the item itself was saved; the name is asked for again next time.
+      }
+    },
+
+    // MARK: Pantry
+
+    /** Adds `count` of a product to the pantry (scanning it again adds more). */
+    addToPantry: async (name, upc = null, count = 1) => {
+      const hid = get().household?.id;
+      const clean = name.trim();
+      if (!hid || !clean || count < 1) return null;
+      const key = upc ? `upc:${upc}` : productKey(clean);
+      const existing = pantryItem(get(), key);
+      const optimistic: PantryItem = existing
+        ? { ...existing, quantity: existing.quantity + count }
+        : { id: randomUUID(), household_id: hid, name: clean, product_key: key, upc, quantity: count, added_by: get().me?.id ?? null };
+      set({ pantry: [...get().pantry.filter((p) => p.product_key !== key), optimistic] });
+      let saved: PantryItem | null = null;
+      const ok = await attempt('add to the pantry', async () => {
+        saved = await repo().adjustPantry(hid, key, clean, upc, count, get().me?.id ?? null);
+      });
+      if (!ok || !saved) return null;
+      const row: PantryItem = saved;
+      set({ pantry: [...get().pantry.filter((p) => p.product_key !== key), row] });
+      if (upc) await get().rememberName(upc, clean);
+      return row;
+    },
+
+    adjustPantryItem: async (item, delta) => {
+      const current = get().pantry.find((p) => p.id === item.id);
+      if (!current) return;
+      const quantity = Math.max(current.quantity + delta, 0);
+      if (quantity === current.quantity) return;
+      set({ pantry: get().pantry.map((p) => (p.id === item.id ? { ...p, quantity } : p)) });
+      const hid = current.household_id;
+      await attempt('update the pantry', async () => {
+        const row = await repo().adjustPantry(hid, current.product_key, current.name, current.upc, delta, get().me?.id ?? null);
+        set({ pantry: get().pantry.map((p) => (p.id === row.id ? row : p)) });
+      });
+      if (quantity === 0) get().flash(`Out of ${current.name} — tap + list to restock`);
+    },
+
+    removePantryItem: async (item) => {
+      set({ pantry: get().pantry.filter((p) => p.id !== item.id) });
+      if (await attempt('remove the item', () => repo().deletePantryItem(item.id))) get().flash(`${item.name} removed`);
     },
 
     // MARK: Meals & members
