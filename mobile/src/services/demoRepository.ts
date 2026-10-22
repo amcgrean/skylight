@@ -11,9 +11,11 @@ import {
   type FamilyEvent,
   type GroceryItem,
   type GroceryStore,
+  type HouseholdProduct,
   type Meal,
   type Member,
   type MemberKind,
+  type PantryItem,
   type ProductInfo,
   type Snapshot,
   type StoreStat,
@@ -84,9 +86,34 @@ export class DemoRepository implements Repository {
     const known: Record<string, [string, string]> = {
       '036000411287': ['Diapers, size 5', 'Huggies'],
       '051500725306': ['Creamy peanut butter, 40 oz', 'Jif'],
+      '4099100017885': ['Vitality Cereal Vanilla Almond', 'Aldi'],
     };
     const k = known[upc];
     return k ? { upc, name: k[0], brand: k[1], found: true } : { upc, name: null, brand: null, found: false };
+  }
+
+  async rememberProduct(product: HouseholdProduct): Promise<void> {
+    this.snap.householdProducts = [...this.snap.householdProducts.filter((p) => p.upc !== product.upc), product];
+  }
+
+  async adjustPantry(
+    householdID: UUID, key: string, name: string, upc: string | null, delta: number, by: UUID | null,
+  ): Promise<PantryItem> {
+    const existing = this.snap.pantry.find((p) => p.product_key === key);
+    if (existing) {
+      existing.quantity = Math.max(existing.quantity + delta, 0);
+      return { ...existing };
+    }
+    const item: PantryItem = {
+      id: randomUUID(), household_id: householdID, name: name.trim(), product_key: key, upc,
+      quantity: Math.max(delta, 0), added_by: by,
+    };
+    this.snap.pantry.push(item);
+    return { ...item };
+  }
+
+  async deletePantryItem(id: UUID): Promise<void> {
+    this.snap.pantry = this.snap.pantry.filter((p) => p.id !== id);
   }
 
   async upsertMeal(meal: Meal): Promise<void> {
@@ -194,8 +221,17 @@ function sample(): Snapshot {
     { household_id: hid, day: dayKey(addDays(1, now)), title: 'Sheet-pan chicken', cook_member: aaron.id, cook_label: null },
   ];
 
+  const p = (name: string, quantity: number, upc: string | null = null): PantryItem => ({
+    id: randomUUID(), household_id: hid, name, product_key: upc ? `upc:${upc}` : productKey(name), upc,
+    quantity, added_by: makala.id,
+  });
+  const pantry = [
+    p('Creamy peanut butter, 40 oz', 2, '051500725306'), p('Pasta', 3), p('Canned black beans', 4),
+    p('Applesauce pouches', 0), p('Vitality Cereal Vanilla Almond', 1, '4099100017885'), p('Dog food', 1),
+  ];
+
   return {
     household, me: aaron, members, events, pattern, overrides, chores, completions,
-    stores: [hyvee, costco, target, aldi], groceries, storeStats, meals,
+    stores: [hyvee, costco, target, aldi], groceries, storeStats, meals, householdProducts: [], pantry,
   };
 }

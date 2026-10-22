@@ -1,48 +1,26 @@
-// Looks up a barcode: cache first, then Open Food Facts (groceries), then
-// UPCitemdb's free trial endpoint (household / pet items). Results — including
-// misses — are cached in public.products so each code is fetched once.
+// Looks up a barcode: cache first, then the free Open*Facts databases and UPCitemdb
+// (see _shared/products.ts). Hits are cached for months. A miss is cached for a few
+// days, but only when every source actually answered: a timeout or rate limit is
+// never remembered as "unknown product".
 //
-// Body: { "upc": "036000411287" }  →  { upc, name, brand, found, source }
+// Household-typed names (store brands no database knows) live in household_products
+// and are checked by the app before it calls this function.
+//
+// Body: { "upc": "036000411287" }  →  { upc, name, brand, found, source, incomplete? }
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders, env, json } from "../_shared/http.ts";
+import { cleanCode, lookupBarcode } from "../_shared/products.ts";
 
 const CACHE_DAYS_FOUND = 180;
-const CACHE_DAYS_MISS = 14;
-const USER_AGENT = "FamilyHub/0.1 (personal family app)";
-
-type Hit = { name: string; brand: string | null; source: string };
-
-async function openFoodFacts(upc: string): Promise<Hit | null> {
-  const res = await fetch(
-    `https://world.openfoodfacts.org/api/v2/product/${upc}.json?fields=product_name,brands`,
-    { headers: { "User-Agent": USER_AGENT } },
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  const name = data?.product?.product_name?.trim();
-  if (data?.status !== 1 || !name) return null;
-  const brand = (data.product.brands ?? "").split(",")[0]?.trim() || null;
-  return { name, brand, source: "openfoodfacts" };
-}
-
-async function upcItemDb(upc: string): Promise<Hit | null> {
-  const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`, {
-    headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
-  });
-  if (!res.ok) return null; // 429 = free daily limit reached
-  const data = await res.json();
-  const item = data?.items?.[0];
-  if (!item?.title) return null;
-  return { name: String(item.title).trim(), brand: item.brand ? String(item.brand).trim() : null, source: "upcitemdb" };
-}
+const CACHE_DAYS_MISS = 3;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   let upc = "";
   try {
-    upc = String((await req.json()).upc ?? "").replace(/\D/g, "");
+    upc = cleanCode(String((await req.json()).upc ?? ""));
   } catch {
     return json({ error: "Expected a JSON body" }, 400);
   }
@@ -59,21 +37,25 @@ Deno.serve(async (req) => {
     }
   }
 
-  let hit: Hit | null = null;
-  try {
-    hit = (await openFoodFacts(upc)) ?? (await upcItemDb(upc));
-  } catch (_) {
-    hit = null;
+  const { hit, complete } = await lookupBarcode(upc);
+
+  if (hit || complete) {
+    await admin.from("products").upsert({
+      upc,
+      name: hit?.name ?? null,
+      brand: hit?.brand ?? null,
+      source: hit?.source ?? null,
+      found: !!hit,
+      fetched_at: new Date().toISOString(),
+    });
   }
 
-  await admin.from("products").upsert({
+  return json({
     upc,
     name: hit?.name ?? null,
     brand: hit?.brand ?? null,
-    source: hit?.source ?? null,
     found: !!hit,
-    fetched_at: new Date().toISOString(),
+    source: hit?.source ?? null,
+    ...(hit || complete ? {} : { incomplete: true }),
   });
-
-  return json({ upc, name: hit?.name ?? null, brand: hit?.brand ?? null, found: !!hit, source: hit?.source ?? null });
 });

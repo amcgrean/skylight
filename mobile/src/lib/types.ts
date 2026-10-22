@@ -124,6 +124,29 @@ export type ProductInfo = {
   name: string | null;
   brand: string | null;
   found: boolean;
+  /** Where the name came from: a public database, or "household" for one the family typed. */
+  source?: string | null;
+  /** True when a barcode database couldn't be reached, so "not found" isn't certain. */
+  incomplete?: boolean;
+};
+
+/** A name the family gave a barcode (store brands no database knows). */
+export type HouseholdProduct = {
+  household_id: UUID;
+  upc: string;
+  name: string;
+  updated_by: UUID | null;
+};
+
+/** Something on hand at home. One row per product; quantity 0 means "out". */
+export type PantryItem = {
+  id: UUID;
+  household_id: UUID;
+  name: string;
+  product_key: string;
+  upc: string | null;
+  quantity: number;
+  added_by: UUID | null;
 };
 
 /** Everything the phone needs, loaded in one go. */
@@ -140,6 +163,8 @@ export type Snapshot = {
   groceries: GroceryItem[];
   storeStats: StoreStat[];
   meals: Meal[];
+  householdProducts: HouseholdProduct[];
+  pantry: PantryItem[];
 };
 
 export type SyncOutcome =

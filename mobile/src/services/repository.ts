@@ -3,8 +3,10 @@ import type {
   DaycareOverride,
   FamilyEvent,
   GroceryItem,
+  HouseholdProduct,
   Meal,
   Member,
+  PantryItem,
   ProductInfo,
   Snapshot,
   SyncOutcome,
@@ -36,6 +38,12 @@ export interface Repository {
   deleteGroceries(ids: UUID[]): Promise<void>;
   recordStoreTrip(householdID: UUID, productKey: string, storeID: UUID): Promise<void>;
   lookupUPC(upc: string): Promise<ProductInfo>;
+  /** Saves the family's name for a barcode, so it's known on every phone next time. */
+  rememberProduct(product: HouseholdProduct): Promise<void>;
+
+  /** Adds `delta` units (negative removes, never below 0); creates the item on first add. */
+  adjustPantry(householdID: UUID, productKey: string, name: string, upc: string | null, delta: number, by: UUID | null): Promise<PantryItem>;
+  deletePantryItem(id: UUID): Promise<void>;
 
   upsertMeal(meal: Meal): Promise<void>;
   updateMember(member: Member): Promise<void>;

@@ -12,6 +12,7 @@ This repo is **phase 1: the phone app plus its backend.** The app is built with 
 | Daycare runs | A weekly default (Aaron drops off, Makala picks up). Tap a name to swap it to Makala, Jay & Peggy, or Ron & Autumn. The moon button sets up a sleepover, which hands that night's pickup and the next drop-off to the grandparents. Long-press a day to mark daycare closed. |
 | Chores | Per-person daily chores with points. |
 | Lists | Groceries grouped by store. Scan a barcode or type an item. The app learns which store each item usually comes from. |
+| Pantry | What's on hand at home. Scan things in as you put them away (scanning again adds one more), tap − as you use them, and send anything that runs out to the grocery list. |
 | Sync | Every phone updates live (Supabase Realtime). |
 
 **Demo mode:** if the Supabase keys aren't set, the app runs on sample data stored only on that phone. Use it to try the app before any backend exists.
@@ -120,8 +121,23 @@ To see the family calendar on her iPhone, Makala can subscribe to it, or the own
 
 ## 4. Barcode lookups
 
-`upc-lookup` checks the cache first. On a miss it tries **Open Food Facts** (free, strong on groceries), then UPCitemdb's free trial endpoint (household and pet items, about 100 lookups a day). Every result, including misses, is cached in `products`, so each barcode is fetched only once.
-If neither source knows the item, the scan screen asks you to type a name. The barcode then remembers that name and its store.
+When you scan a barcode, the app checks three places in order:
+
+1. **Names your family typed.** Store brands like Aldi's are often in no database. The first time you scan one, type what it is. Every phone remembers that barcode from then on (the `household_products` table).
+2. **The `upc-lookup` cache** (`products`), so each barcode is fetched from the internet only once.
+3. **Free public databases:** Open Food Facts, Open Products Facts, Open Pet Food Facts and Open Beauty Facts, all asked at once, then UPCitemdb's free trial (about 100 lookups a day). None of them needs an API key.
+
+A barcode nobody knows is cached as unknown for 3 days. If a source times out or is rate-limited, the miss isn't cached, so the next scan tries again.
+
+After pulling these changes, apply the new migration and redeploy the function:
+
+```bash
+supabase db push
+supabase functions deploy upc-lookup
+```
+
+The migration also clears the old cached misses, so barcodes that failed before get looked up again.
+To test the lookup code: `deno test supabase/functions/_shared/products_test.ts`.
 
 **How store learning works:**
 
