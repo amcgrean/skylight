@@ -1,0 +1,221 @@
+# Ships every merge to main, so nobody has to run deploy commands by hand.
+#
+#   supabase/**  ->  migrations pushed to the database, edge functions redeployed
+#   mobile/**    ->  over-the-air app update; a new EAS build too when the native
+#                    side changed (and, if set up, it goes to TestFlight)
+#
+# The backend goes first, so a new app version never reaches phones before the
+# database it needs. Until the secrets below exist each job prints a warning and
+# skips, so nothing turns red before setup. One-time setup: docs/automatic-deploys.md.
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD, SUPABASE_PROJECT_REF
+#   EXPO_TOKEN, EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY
+#   optional, for automatic TestFlight: ASC_APP_ID, ASC_API_KEY_P8, ASC_API_KEY_ID,
+#   ASC_API_KEY_ISSUER_ID
+# Variables (same page, Variables tab), optional:
+#   IOS_AUTO_SUBMIT = true   wait for new iOS builds and send them to TestFlight
+#   APP_PLATFORMS   = ios    or "all" once there is an Android build
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: What to deploy
+        type: choice
+        options: [everything, backend, app]
+        default: everything
+      force_build:
+        description: Start a new app build even if one matches this version
+        type: boolean
+        default: false
+      mark_applied:
+        description: >-
+          Migrations already applied by hand in the SQL editor, space-separated
+          (first run only, for example "20261013000000 20261022000000")
+        type: string
+        default: ''
+
+# One deploy at a time, in order. A deploy that's running is never cancelled,
+# because stopping halfway through a migration or a build is worse than waiting.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.pick.outputs.backend }}
+      app: ${{ steps.pick.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            backend:
+              - 'supabase/**'
+            app:
+              - 'mobile/**'
+              - 'scripts/eas-deploy*.mjs'
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          TARGET: ${{ inputs.target }}
+          PUSH_BACKEND: ${{ steps.filter.outputs.backend }}
+          PUSH_APP: ${{ steps.filter.outputs.app }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            [ "$TARGET" != "app" ] && backend=true || backend=false
+            [ "$TARGET" != "backend" ] && app=true || app=false
+          else
+            backend="${PUSH_BACKEND:-false}"
+            app="${PUSH_APP:-false}"
+          fi
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "Backend: $backend, app: $app"
+
+  backend:
+    name: Supabase (migrations + functions)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - id: guard
+        run: |
+          if [ -z "$SUPABASE_ACCESS_TOKEN" ] || [ -z "$SUPABASE_DB_PASSWORD" ] || [ -z "$SUPABASE_PROJECT_REF" ]; then
+            echo "::warning title=Supabase not deployed::Add SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD and SUPABASE_PROJECT_REF secrets to deploy the backend automatically (docs/automatic-deploys.md)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.ok == 'true'
+      - uses: supabase/setup-cli@v1
+        if: steps.guard.outputs.ok == 'true'
+        with:
+          version: 2.122.0
+      - name: Link project
+        if: steps.guard.outputs.ok == 'true'
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Record migrations applied by hand
+        if: steps.guard.outputs.ok == 'true' && inputs.mark_applied != ''
+        env:
+          VERSIONS: ${{ inputs.mark_applied }}
+        run: |
+          for v in $VERSIONS; do
+            case "$v" in
+              *[!0-9]*) echo "::error::'$v' is not a migration version (digits only)"; exit 1 ;;
+            esac
+          done
+          # shellcheck disable=SC2086
+          supabase migration repair --status applied $VERSIONS --linked --yes
+      - name: Push migrations
+        if: steps.guard.outputs.ok == 'true'
+        run: supabase db push --linked --yes
+      - name: Explain a failed migration push
+        if: failure() && steps.guard.outputs.ok == 'true'
+        run: |
+          echo "::error title=Migrations not pushed::If the error says a table or function already exists, those migrations were applied by hand in the SQL editor. Run this workflow manually with 'mark_applied' set to their versions (docs/automatic-deploys.md)."
+          supabase migration list --linked || true
+      - name: Deploy edge functions
+        if: steps.guard.outputs.ok == 'true'
+        run: supabase functions deploy --project-ref "$SUPABASE_PROJECT_REF" --use-api
+
+  app:
+    name: App (update or build)
+    needs: [changes, backend]
+    # Runs when the app changed and the backend either succeeded or had nothing to do.
+    if: >-
+      always() && needs.changes.outputs.app == 'true' &&
+      (needs.backend.result == 'success' || needs.backend.result == 'skipped')
+    runs-on: ubuntu-latest
+    # Long enough to wait for an iOS build when TestFlight submission is on.
+    timeout-minutes: 90
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: guard
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::warning title=App not deployed::Add the EXPO_TOKEN secret to ship app updates automatically (docs/automatic-deploys.md)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          elif ! node -e 'process.exit(require("./mobile/app.json").expo?.extra?.eas?.projectId ? 0 : 1)'; then
+            echo "::warning title=App not deployed::The app isn't linked to an Expo project yet. Run the 'App setup' workflow once (docs/automatic-deploys.md)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.ok == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install
+        if: steps.guard.outputs.ok == 'true'
+        working-directory: mobile
+        run: npm ci
+      - uses: expo/expo-github-action@v8
+        if: steps.guard.outputs.ok == 'true'
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Sync Supabase keys to EAS
+        if: steps.guard.outputs.ok == 'true'
+        working-directory: mobile
+        env:
+          SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::warning title=No Supabase keys::EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY secrets are missing; using whatever is already stored in EAS. Without them the app opens in demo mode."
+            exit 0
+          fi
+          # Both are public by design (they ship inside the app; row-level security
+          # protects the data), so they're stored as plain-text EAS variables.
+          for env in production preview; do
+            eas env:create --name EXPO_PUBLIC_SUPABASE_URL --value "$SUPABASE_URL" \
+              --environment "$env" --visibility plaintext --force --non-interactive
+            eas env:create --name EXPO_PUBLIC_SUPABASE_ANON_KEY --value "$SUPABASE_ANON_KEY" \
+              --environment "$env" --visibility plaintext --force --non-interactive
+          done
+      - name: Ship
+        if: steps.guard.outputs.ok == 'true'
+        env:
+          PLATFORMS: ${{ vars.APP_PLATFORMS || 'ios' }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+          IOS_AUTO_SUBMIT: ${{ vars.IOS_AUTO_SUBMIT }}
+          UPDATE_MESSAGE: ${{ github.event.head_commit.message || 'Manual deploy' }}
+          ASC_APP_ID: ${{ secrets.ASC_APP_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_KEY_ISSUER_ID: ${{ secrets.ASC_API_KEY_ISSUER_ID }}
+          # Lets EAS create or renew iOS signing certificates without a person present.
+          EXPO_ASC_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_API_KEY_ISSUER_ID }}
+          EXPO_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$ASC_API_KEY_P8" ]; then
+            key_dir="$(mktemp -d)"
+            printf '%s\n' "$ASC_API_KEY_P8" > "$key_dir/AuthKey.p8"
+            chmod 600 "$key_dir/AuthKey.p8"
+            export EXPO_ASC_API_KEY_PATH="$key_dir/AuthKey.p8"
+          fi
+          node scripts/eas-deploy.mjs

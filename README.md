@@ -34,6 +34,13 @@ Everything works in Expo Go, including the barcode scanner.
 
 Handy checks while working on it: `npm run typecheck` and `npm run lint`.
 
+## Shipping changes
+
+**Merging a pull request into `main` ships it.** GitHub Actions pushes new database migrations and edge functions to Supabase. It then publishes an over-the-air app update, and builds a new app binary when native code changed.
+Nobody runs deploy commands by hand.
+To set it up once (secrets and a one-click setup run), see **[docs/automatic-deploys.md](docs/automatic-deploys.md)**.
+The manual commands below still work, for local testing or before automation is set up.
+
 ## 2. Build the real app (EAS)
 
 Live mode with Sign in with Apple needs the app's own bundle ID, `com.amcgrean.familyhub`, so it needs a real build instead of Expo Go.
@@ -129,14 +136,9 @@ When you scan a barcode, the app checks three places in order:
 
 A barcode nobody knows is cached as unknown for 3 days. If a source times out or is rate-limited, the miss isn't cached, so the next scan tries again.
 
-After pulling these changes, apply the new migration and redeploy the function:
+Migrations and functions deploy automatically when merged (see [Shipping changes](#shipping-changes)). By hand, it's `supabase db push` then `supabase functions deploy upc-lookup`.
 
-```bash
-supabase db push
-supabase functions deploy upc-lookup
-```
-
-The migration also clears the old cached misses, so barcodes that failed before get looked up again.
+The pantry migration also clears the old cached misses, so barcodes that failed before get looked up again.
 To test the lookup code: `deno test supabase/functions/_shared/products_test.ts`.
 
 **How store learning works:**
@@ -161,8 +163,16 @@ mobile/                       Expo app (SDK 57, Expo Router, TypeScript)
     theme/                    palette and fonts
   assets/fonts/               Josefin Sans + Pacifico (SIL Open Font License)
 docs/
+  automatic-deploys.md        how merges ship, and the one-time setup
   kitchen-display-brief.md    original Skylight web-dashboard brief (phase 2 input)
+scripts/
+  eas-deploy.mjs              CI: over-the-air update, plus a new build when native code changed
+.github/workflows/
+  ci.yml                      checks on every PR: typecheck, lint, function tests
+  deploy.yml                  ships every merge to main: Supabase first, then the app
+  app-setup.yml               one-time: link the app to its Expo project
 supabase/
+  config.toml                 CLI settings used by the deploy workflow
   migrations/                 schema, row-level security, RPCs, realtime
   seed.sql                    our household: members, daycare pattern, stores, chores
   functions/                  google-calendar-sync, upc-lookup

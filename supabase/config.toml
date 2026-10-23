@@ -1,0 +1,16 @@
+# Supabase CLI settings. CI uses these to link this repo to the hosted project and to
+# push migrations and edge functions (.github/workflows/deploy.yml). The project ref
+# itself comes from the SUPABASE_PROJECT_REF secret, so nothing here is private.
+# Auth providers (Sign in with Apple) are set in the Supabase dashboard, not here.
+project_id = "family-hub"
+
+[db]
+major_version = 17
+
+# Both functions require a signed-in user (the platform default, spelled out here
+# so a deploy can never quietly open them up).
+[functions.upc-lookup]
+verify_jwt = true
+
+[functions.google-calendar-sync]
+verify_jwt = true
