@@ -1,0 +1,84 @@
+# Run once by hand (Actions -> App setup -> Run workflow) after adding the EXPO_TOKEN
+# secret. It creates the Expo project for the app, points the app at its update
+# server, and commits the resulting app.json (and eas.json) back to the branch.
+# After that, every merge to main ships through deploy.yml. Safe to run again: it
+# does nothing when the app is already set up.
+name: App setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_first_deploy:
+        description: Kick off the first app build right after setup
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: app-setup
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - name: Check secret
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Add the EXPO_TOKEN secret first (docs/automatic-deploys.md, step 1)."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - working-directory: mobile
+        run: npm ci
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - name: Who am I
+        working-directory: mobile
+        run: eas whoami
+      - name: Create or link the Expo project
+        working-directory: mobile
+        run: |
+          if node -e 'process.exit(require("./app.json").expo?.extra?.eas?.projectId ? 0 : 1)'; then
+            echo "Already linked to an Expo project."
+          else
+            eas init --non-interactive --force
+          fi
+      - name: Point the app at EAS Update
+        working-directory: mobile
+        run: eas update:configure --platform all --environment production --non-interactive
+      - name: Commit the config
+        id: commit
+        run: |
+          if git diff --quiet -- mobile/app.json mobile/eas.json; then
+            echo "app.json and eas.json unchanged."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff -- mobile/app.json mobile/eas.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mobile/app.json mobile/eas.json
+          git commit -m "Link the app to its Expo project (App setup workflow)"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Start the first deploy
+        if: inputs.run_first_deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # A push made with the workflow's own token doesn't trigger other workflows,
+        # so the first deploy is started explicitly.
+        run: gh workflow run deploy.yml --ref "$GITHUB_REF_NAME" -f target=app

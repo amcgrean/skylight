@@ -6,6 +6,7 @@ import { Pressable, TextInput, View } from 'react-native';
 
 import { Avatar, Card, Eyebrow, OutlineButton, Page, T, TextButton } from '../components/ui';
 import type { Member } from '../lib/types';
+import { versionLabel } from '../lib/updates';
 import { useAuth } from '../state/auth';
 import { useHub } from '../state/household';
 import * as sel from '../state/selectors';
@@ -74,6 +75,10 @@ export default function SettingsScreen() {
             />
           )}
         </Card>
+
+        <T size={12} color={Palette.inkSoft} style={{ textAlign: 'center' }} selectable>
+          {`Version ${versionLabel()}`}
+        </T>
       </Page>
     </>
   );

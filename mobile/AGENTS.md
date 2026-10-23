@@ -34,6 +34,8 @@ Run lint and typecheck before declaring any task done.
 Use EAS to build, sign, and submit the app in the cloud (`eas build`, `eas submit`) and to ship over-the-air updates (`eas update`) — no local Xcode or Android Studio required. Run EAS CLI as `bunx eas-cli <command>` in Bun projects, or `npx eas-cli@latest <command>` otherwise; substitute that for bare `eas` in docs examples.
 Docs: https://docs.expo.dev/eas/index.md
 
+In this repo, merges to `main` ship automatically (`.github/workflows/deploy.yml`, explained in `docs/automatic-deploys.md`), so don't run `eas update` or `eas build` for production by hand. The runtime version is a fingerprint (`runtimeVersion.policy: "fingerprint"`). Any native change (a package with native code, `app.json`, `eas.json`, config plugins) therefore triggers a new build. Phones only get JavaScript changes over the air until they install that build.
+
 ## Rules
 
 - If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
